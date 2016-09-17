@@ -329,7 +329,7 @@ func htmlify(w http.ResponseWriter, r *http.Request, content string) string {
 	for _, entry := range entries {
 		kw := entry.Keyword
 		salt, ok := ca.Get(fmt.Sprintf("salt:%s", kw))
-		if (!ok) {
+		if !ok {
 			salt, _ = strrand.RandomString(`[a-zA-Z][あ-を][ア-ヲ]{20}`)
 			ca.Set(fmt.Sprintf("salt:%s", kw), salt, cache.NoExpiration)
 		}
