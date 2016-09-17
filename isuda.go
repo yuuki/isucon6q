@@ -84,6 +84,7 @@ func initializeHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func topHandler(w http.ResponseWriter, r *http.Request) {
+	s1 := time.Now()
 	if err := setName(w, r); err != nil {
 		forbidden(w)
 		return
@@ -138,6 +139,8 @@ func topHandler(w http.ResponseWriter, r *http.Request) {
 	}{
 		r.Context(), entries, page, lastPage, pages,
 	})
+	e1 := time.Now()
+	log.Println(fmt.Sprintf("topHandler: %d msec", e1.Sub(s1).Nanoseconds() / 1000 / 1000))
 }
 
 func robotsHandler(w http.ResponseWriter, r *http.Request) {
@@ -145,6 +148,8 @@ func robotsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func keywordPostHandler(w http.ResponseWriter, r *http.Request) {
+	s1 := time.Now()
+
 	if err := setName(w, r); err != nil {
 		forbidden(w)
 		return
@@ -174,6 +179,9 @@ func keywordPostHandler(w http.ResponseWriter, r *http.Request) {
 	`, userID, keyword, description, userID, keyword, description)
 	panicIf(err)
 	http.Redirect(w, r, "/", http.StatusFound)
+
+	e1 := time.Now()
+	log.Println(fmt.Sprintf("keywordPostHandler: %d msec", e1.Sub(s1).Nanoseconds() / 1000 / 1000))
 }
 
 func loginHandler(w http.ResponseWriter, r *http.Request) {
@@ -252,6 +260,8 @@ func register(user string, pass string) int64 {
 }
 
 func keywordByKeywordHandler(w http.ResponseWriter, r *http.Request) {
+	s1 := time.Now()
+
 	if err := setName(w, r); err != nil {
 		forbidden(w)
 		return
@@ -274,9 +284,14 @@ func keywordByKeywordHandler(w http.ResponseWriter, r *http.Request) {
 	}{
 		r.Context(), e,
 	})
+
+	e1 := time.Now()
+	log.Println(fmt.Sprintf("keywordByKeywordHandler: %d msec", e1.Sub(s1).Nanoseconds() / 1000 / 1000))
 }
 
 func keywordByKeywordDeleteHandler(w http.ResponseWriter, r *http.Request) {
+	s1 := time.Now()
+
 	if err := setName(w, r); err != nil {
 		forbidden(w)
 		return
@@ -305,12 +320,16 @@ func keywordByKeywordDeleteHandler(w http.ResponseWriter, r *http.Request) {
 	_, err = db.Exec(`DELETE FROM entry WHERE keyword = ?`, keyword)
 	panicIf(err)
 	http.Redirect(w, r, "/", http.StatusFound)
+
+	e1 := time.Now()
+	log.Println(fmt.Sprintf("keywordByDeleteHandler: %d msec", e1.Sub(s1).Nanoseconds() / 1000 / 1000))
 }
 
 func htmlify(w http.ResponseWriter, r *http.Request, content string) string {
 	if content == "" {
 		return ""
 	}
+	s1 := time.Now()
 	rows, err := db.Query(`
 		SELECT keyword FROM entry ORDER BY CHARACTER_LENGTH(keyword) DESC
 	`)
@@ -323,8 +342,10 @@ func htmlify(w http.ResponseWriter, r *http.Request, content string) string {
 		entries = append(entries, &e)
 	}
 	rows.Close()
+	e1 := time.Now()
+	log.Println(fmt.Sprintf("selectkeyword: %d msec", e1.Sub(s1).Nanoseconds() / 1000 / 1000))
 
-	s1 := time.Now()
+	s2 := time.Now()
 	kw2sha := make(map[string]string)
 	for _, entry := range entries {
 		kw := entry.Keyword
@@ -336,8 +357,9 @@ func htmlify(w http.ResponseWriter, r *http.Request, content string) string {
 		content = strings.Replace(content, kw, salt.(string), -1)
 		kw2sha[kw] = salt.(string)
 	}
-	e1 := time.Now()
-	log.Println(fmt.Sprintf("randomstring: %d msec", e1.Sub(s1).Nanoseconds() / 1000 / 1000))
+	e2 := time.Now()
+	log.Println(fmt.Sprintf("randomstring: %d msec", e2.Sub(s2).Nanoseconds() / 1000 / 1000))
+
 	content = html.EscapeString(content)
 	for kw, hash := range kw2sha {
 		u, err := r.URL.Parse(baseUrl.String()+"/keyword/" + pathURIEscape(kw))
