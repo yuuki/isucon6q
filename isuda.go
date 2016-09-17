@@ -16,12 +16,14 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Songmu/strrand"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/gorilla/mux"
 	"github.com/gorilla/sessions"
 	"github.com/unrolled/render"
+	"github.com/patrickmn/go-cache"
 )
 
 const (
@@ -39,6 +41,8 @@ var (
 	store   *sessions.CookieStore
 
 	errInvalidUser = errors.New("Invalid User")
+
+        ca = cache.New(5*time.Minute, 30*time.Second)
 )
 
 func setName(w http.ResponseWriter, r *http.Request) error {
@@ -308,25 +312,32 @@ func htmlify(w http.ResponseWriter, r *http.Request, content string) string {
 		return ""
 	}
 	rows, err := db.Query(`
-		SELECT * FROM entry ORDER BY CHARACTER_LENGTH(keyword) DESC
+		SELECT keyword FROM entry ORDER BY CHARACTER_LENGTH(keyword) DESC
 	`)
 	panicIf(err)
 	entries := make([]*Entry, 0, 500)
 	for rows.Next() {
 		e := Entry{}
-		err := rows.Scan(&e.ID, &e.AuthorID, &e.Keyword, &e.Description, &e.UpdatedAt, &e.CreatedAt)
+		err := rows.Scan(&e.Keyword)
 		panicIf(err)
 		entries = append(entries, &e)
 	}
 	rows.Close()
 
+	s1 := time.Now()
 	kw2sha := make(map[string]string)
 	for _, entry := range entries {
 		kw := entry.Keyword
-		salt, _ := strrand.RandomString(`[a-zA-Z][あ-を][ア-ヲ]{20}`)
-		content = strings.Replace(content, kw, salt, -1)
-		kw2sha[kw] = salt
+		salt, ok := ca.Get(fmt.Sprintf("salt:%s", kw))
+		if (!ok) {
+			salt, _ = strrand.RandomString(`[a-zA-Z][あ-を][ア-ヲ]{20}`)
+			ca.Set(fmt.Sprintf("salt:%s", kw), salt, cache.NoExpiration)
+		}
+		content = strings.Replace(content, kw, salt.(string), -1)
+		kw2sha[kw] = salt.(string)
 	}
+	e1 := time.Now()
+	log.Println(fmt.Sprintf("randomstring: %d msec", e1.Sub(s1).Nanoseconds() / 1000 / 1000))
 	content = html.EscapeString(content)
 	for kw, hash := range kw2sha {
 		u, err := r.URL.Parse(baseUrl.String()+"/keyword/" + pathURIEscape(kw))
