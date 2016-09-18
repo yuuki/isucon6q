@@ -379,7 +379,8 @@ func htmlify2(w http.ResponseWriter, r *http.Request, contents []string) []strin
 			link := fmt.Sprintf("<a href=\"%s\">%s</a>", u, html.EscapeString(kw))
 			content = strings.Replace(content, hash, link, -1)
 		}
-		contents[i] = strings.Replace(content, "\n", "<br />\n", -1)
+		contents[i] = content
+		//contents[i] = strings.Replace(content, "\n", "<br />\n", -1)
 	}
 
 	e3 := time.Now()
@@ -430,7 +431,7 @@ func htmlify(w http.ResponseWriter, r *http.Request, content string) string {
 		link := fmt.Sprintf("<a href=\"%s\">%s</a>", u, html.EscapeString(kw))
 		content = strings.Replace(content, hash, link, -1)
 	}
-	return strings.Replace(content, "\n", "<br />\n", -1)
+	return content
 }
 
 func loadStars(keyword string) []*Star {
