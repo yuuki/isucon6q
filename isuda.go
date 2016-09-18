@@ -54,16 +54,11 @@ func setName(w http.ResponseWriter, r *http.Request) error {
 		return nil
 	}
 	setContext(r, "user_id", userID)
-	row := db.QueryRow(`SELECT name FROM user WHERE id = ?`, userID)
-	user := User{}
-	err := row.Scan(&user.Name)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return errInvalidUser
-		}
-		panicIf(err)
+	u, ok := ca.Get(fmt.Sprintf("user:%d", userID))
+	if !ok {
+		return errInvalidUser
 	}
-	setContext(r, "user_name", user.Name)
+	setContext(r, "user_name", u.(*User).Name)
 	return nil
 }
 
@@ -107,6 +102,18 @@ func initializeHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	ca.Set("count", totalEntries, cache.NoExpiration)
 
+	rows, err := db.Query(`SELECT id,name,salt,password FROM user`)
+	if err != nil && err != sql.ErrNoRows {
+		panicIf(err)
+	}
+	for rows.Next() {
+		u := User{}
+		err := rows.Scan(&u.ID, &u.Name, &u.Salt, &u.Password)
+		panicIf(err)
+		ca.Set(fmt.Sprintf("user:%d", u.ID), &u, cache.NoExpiration)
+		ca.Set(fmt.Sprintf("username:%s", u.Name), &u, cache.NoExpiration)
+	}
+
 	re.JSON(w, http.StatusOK, map[string]string{"result": "ok"})
 }
 
@@ -137,7 +144,7 @@ func topHandler(w http.ResponseWriter, r *http.Request) {
 	descriptions := make([]string, 0, 10)
 	for rows.Next() {
 		e := Entry{}
-		err := rows.Scan(&e.ID, &e.AuthorID, &e.Keyword, &e.Description, &e.UpdatedAt, &e.CreatedAt)
+		err := rows.Scan(&e.ID, &e.AuthorID, &e.Keyword, &e.Description, &e.UpdatedAt, &e.CreatedAt, &e.KeywordLen)
 		panicIf(err)
 		//e.Html = htmlify(w, r, e.Description)
 		e.Stars = loadStars(e.Keyword)
@@ -214,10 +221,10 @@ func keywordPostHandler(w http.ResponseWriter, r *http.Request) {
 	ca.Set("count", count.(int)+1, cache.NoExpiration)
 
 	_, err := db.Exec(`
-		INSERT INTO entry (author_id, keyword, description, created_at, updated_at)
-		VALUES (?, ?, ?, NOW(), NOW())
+		INSERT INTO entry (author_id, keyword, description, created_at, updated_at, keyword_length)
+		VALUES (?, ?, ?, NOW(), NOW(), CHARACTER_LENGTH(keyword))
 		ON DUPLICATE KEY UPDATE
-		author_id = ?, keyword = ?, description = ?, updated_at = NOW()
+		author_id = ?, keyword = ?, description = ?, updated_at = NOW(), keyword_length = CHARACTER_LENGTH(keyword)
 	`, userID, keyword, description, userID, keyword, description)
 	panicIf(err)
 	http.Redirect(w, r, "/", http.StatusFound)
@@ -242,14 +249,17 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 
 func loginPostHandler(w http.ResponseWriter, r *http.Request) {
 	name := r.FormValue("name")
-	row := db.QueryRow(`SELECT * FROM user WHERE name = ?`, name)
-	user := User{}
-	err := row.Scan(&user.ID, &user.Name, &user.Salt, &user.Password, &user.CreatedAt)
-	if err == sql.ErrNoRows || user.Password != fmt.Sprintf("%x", sha1.Sum([]byte(user.Salt+r.FormValue("password")))) {
+
+	u, ok := ca.Get(fmt.Sprintf("username:%s", name))
+	if !ok {
 		forbidden(w)
 		return
 	}
-	panicIf(err)
+	user := u.(*User)
+	if user.Password != fmt.Sprintf("%x", sha1.Sum([]byte(user.Salt+r.FormValue("password")))) {
+		forbidden(w)
+		return
+	}
 	session := getSession(w, r)
 	session.Values["user_id"] = user.ID
 	session.Save(r, w)
@@ -312,7 +322,7 @@ func keywordByKeywordHandler(w http.ResponseWriter, r *http.Request) {
 	keyword := mux.Vars(r)["keyword"]
 	row := db.QueryRow(`SELECT * FROM entry WHERE keyword = ?`, keyword)
 	e := Entry{}
-	err := row.Scan(&e.ID, &e.AuthorID, &e.Keyword, &e.Description, &e.UpdatedAt, &e.CreatedAt)
+	err := row.Scan(&e.ID, &e.AuthorID, &e.Keyword, &e.Description, &e.UpdatedAt, &e.CreatedAt, &e.KeywordLen)
 	if err == sql.ErrNoRows {
 		notFound(w)
 		return
@@ -354,7 +364,7 @@ func keywordByKeywordDeleteHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	row := db.QueryRow(`SELECT * FROM entry WHERE keyword = ?`, keyword)
 	e := Entry{}
-	err := row.Scan(&e.ID, &e.AuthorID, &e.Keyword, &e.Description, &e.UpdatedAt, &e.CreatedAt)
+	err := row.Scan(&e.ID, &e.AuthorID, &e.Keyword, &e.Description, &e.UpdatedAt, &e.CreatedAt, &e.KeywordLen)
 	if err == sql.ErrNoRows {
 		notFound(w)
 		return
@@ -370,7 +380,7 @@ func keywordByKeywordDeleteHandler(w http.ResponseWriter, r *http.Request) {
 func htmlify2(w http.ResponseWriter, r *http.Request, contents []string) []string {
 	s1 := time.Now()
 	rows, err := db.Query(`
-		SELECT keyword FROM entry ORDER BY CHARACTER_LENGTH(keyword) DESC
+		SELECT keyword FROM entry ORDER BY keyword_length DESC
 	`)
 	panicIf(err)
 	entries := make([]*Entry, 0, 500)
