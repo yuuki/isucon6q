@@ -9,5 +9,5 @@ fi
 
 GOOS=linux GOARCH=amd64 make
 ssh isucon@"$IPADDR" "sudo service isuda.go stop && sudo service isutar.go stop"
-scp isuda isutar isucon@"$IPADDR":/home/isucon/webapp/go/
+scp isuda isucon@"$IPADDR":/home/isucon/webapp/go/
 ssh isucon@"$IPADDR" "sudo service isuda.go start && sudo service isutar.go start"
