@@ -97,6 +97,8 @@ func topHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	page, _ := strconv.Atoi(p)
 
+	s2 := time.Now()
+
 	rows, err := db.Query(fmt.Sprintf(
 		"SELECT * FROM entry ORDER BY updated_at DESC LIMIT %d OFFSET %d",
 		perPage, perPage*(page-1),
@@ -105,15 +107,24 @@ func topHandler(w http.ResponseWriter, r *http.Request) {
 		panicIf(err)
 	}
 	entries := make([]*Entry, 0, 10)
+	descriptions := make([]string, 0, 10)
 	for rows.Next() {
 		e := Entry{}
 		err := rows.Scan(&e.ID, &e.AuthorID, &e.Keyword, &e.Description, &e.UpdatedAt, &e.CreatedAt)
 		panicIf(err)
-		e.Html = htmlify(w, r, e.Description)
+		//e.Html = htmlify(w, r, e.Description)
 		e.Stars = loadStars(e.Keyword)
+		descriptions = append(descriptions, e.Description)
 		entries = append(entries, &e)
 	}
 	rows.Close()
+
+	e2 := time.Now()
+	log.Println(fmt.Sprintf("pager: %d msec", e2.Sub(s2).Nanoseconds() / 1000 / 1000))
+
+	for i, description := range htmlify2(w, r, descriptions) {
+		entries[i].Html = description
+	}
 
 	var totalEntries int
 	row := db.QueryRow(`SELECT COUNT(*) FROM entry`)
@@ -323,6 +334,58 @@ func keywordByKeywordDeleteHandler(w http.ResponseWriter, r *http.Request) {
 
 	e1 := time.Now()
 	log.Println(fmt.Sprintf("keywordByDeleteHandler: %d msec", e1.Sub(s1).Nanoseconds() / 1000 / 1000))
+}
+
+func htmlify2(w http.ResponseWriter, r *http.Request, contents []string) []string {
+	s1 := time.Now()
+	rows, err := db.Query(`
+		SELECT keyword FROM entry ORDER BY CHARACTER_LENGTH(keyword) DESC
+	`)
+	panicIf(err)
+	entries := make([]*Entry, 0, 500)
+	for rows.Next() {
+		e := Entry{}
+		err := rows.Scan(&e.Keyword)
+		panicIf(err)
+		entries = append(entries, &e)
+	}
+	rows.Close()
+	e1 := time.Now()
+	log.Println(fmt.Sprintf("selectkeyword: %d msec", e1.Sub(s1).Nanoseconds() / 1000 / 1000))
+
+	s2 := time.Now()
+	kw2sha := make(map[string]string)
+	for _, entry := range entries {
+		kw := entry.Keyword
+		salt, ok := ca.Get(fmt.Sprintf("salt:%s", kw))
+		if !ok {
+			salt, _ = strrand.RandomString(`[a-zA-Z][あ-を][ア-ヲ]{20}`)
+			ca.Set(fmt.Sprintf("salt:%s", kw), salt, cache.NoExpiration)
+		}
+		for i, content := range contents {
+			contents[i] = strings.Replace(content, kw, salt.(string), -1)
+		}
+		kw2sha[kw] = salt.(string)
+	}
+	e2 := time.Now()
+	log.Println(fmt.Sprintf("randomstring: %d msec", e2.Sub(s2).Nanoseconds() / 1000 / 1000))
+
+	s3 := time.Now()
+	for i, content := range contents {
+		content = html.EscapeString(content)
+		for kw, hash := range kw2sha {
+			u, err := r.URL.Parse(baseUrl.String()+"/keyword/" + pathURIEscape(kw))
+			panicIf(err)
+			link := fmt.Sprintf("<a href=\"%s\">%s</a>", u, html.EscapeString(kw))
+			content = strings.Replace(content, hash, link, -1)
+		}
+		contents[i] = strings.Replace(content, "\n", "<br />\n", -1)
+	}
+
+	e3 := time.Now()
+	log.Println(fmt.Sprintf("replacehash: %d msec", e3.Sub(s3).Nanoseconds() / 1000 / 1000))
+
+	return contents
 }
 
 func htmlify(w http.ResponseWriter, r *http.Request, content string) string {
