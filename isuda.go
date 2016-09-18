@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"crypto/sha1"
 	"database/sql"
@@ -80,6 +81,32 @@ func initializeHandler(w http.ResponseWriter, r *http.Request) {
 	_, err = sdb.Exec("TRUNCATE star")
 	panicIf(err)
 
+	// loadspam
+	{
+		f, err := os.Open("/home/isucon/spam.txt")
+		panicIf(err)
+		scanner := bufio.NewScanner(f)
+		for scanner.Scan() {
+			ca.Set(fmt.Sprintf("spam:%s", scanner.Text()), "novalid", cache.NoExpiration)
+		}
+	}
+	{
+		f, err := os.Open("/home/isucon/nospam.txt")
+		panicIf(err)
+		scanner := bufio.NewScanner(f)
+		for scanner.Scan() {
+			ca.Set(fmt.Sprintf("spam:%s", scanner.Text()), "valid", cache.NoExpiration)
+		}
+	}
+
+	var totalEntries int
+	row := db.QueryRow(`SELECT COUNT(*) FROM entry`)
+	err = row.Scan(&totalEntries)
+	if err != nil && err != sql.ErrNoRows {
+		panicIf(err)
+	}
+	ca.Set("count", totalEntries, cache.NoExpiration)
+
 	re.JSON(w, http.StatusOK, map[string]string{"result": "ok"})
 }
 
@@ -126,14 +153,9 @@ func topHandler(w http.ResponseWriter, r *http.Request) {
 		entries[i].Html = description
 	}
 
-	var totalEntries int
-	row := db.QueryRow(`SELECT COUNT(*) FROM entry`)
-	err = row.Scan(&totalEntries)
-	if err != nil && err != sql.ErrNoRows {
-		panicIf(err)
-	}
+	totalEntries, _ := ca.Get("count")
 
-	lastPage := int(math.Ceil(float64(totalEntries) / float64(perPage)))
+	lastPage := int(math.Ceil(float64(totalEntries.(int)) / float64(perPage)))
 	pages := make([]int, 0, 10)
 	start := int(math.Max(float64(1), float64(page-5)))
 	end := int(math.Min(float64(lastPage), float64(page+5)))
@@ -178,10 +200,19 @@ func keywordPostHandler(w http.ResponseWriter, r *http.Request) {
 	userID := getContext(r, "user_id").(int)
 	description := r.FormValue("description")
 
+	s2 := time.Now()
+
 	if isSpamContents(description) || isSpamContents(keyword) {
 		http.Error(w, "SPAM!", http.StatusBadRequest)
 		return
 	}
+
+	e2 := time.Now()
+	log.Println(fmt.Sprintf("isSpamContents: %d msec", e2.Sub(s2).Nanoseconds() / 1000 / 1000))
+
+	count, _ := ca.Get("count")
+	ca.Set("count", count.(int)+1, cache.NoExpiration)
+
 	_, err := db.Exec(`
 		INSERT INTO entry (author_id, keyword, description, created_at, updated_at)
 		VALUES (?, ?, ?, NOW(), NOW())
@@ -359,6 +390,7 @@ func htmlify2(w http.ResponseWriter, r *http.Request, contents []string) []strin
 		kw := entry.Keyword
 		salt, ok := ca.Get(fmt.Sprintf("salt:%s", kw))
 		if !ok {
+			log.Println("salt:", kw)
 			salt, _ = strrand.RandomString(`[a-zA-Z][あ-を][ア-ヲ]{20}`)
 			ca.Set(fmt.Sprintf("salt:%s", kw), salt, cache.NoExpiration)
 		}
@@ -454,6 +486,16 @@ func loadStars(keyword string) []*Star {
 }
 
 func isSpamContents(content string) bool {
+	hash := fmt.Sprintf("%x", sha1.Sum([]byte(content)))
+	res, ok := ca.Get("spam:"+hash)
+	if ok {
+		if res == "valid" {
+			return false
+		} else if res == "novalid" {
+			return true
+		}
+	}
+
 	v := url.Values{}
 	v.Set("content", content)
 	resp, err := http.PostForm(isupamEndpoint, v)
@@ -465,6 +507,19 @@ func isSpamContents(content string) bool {
 	}
 	err = json.NewDecoder(resp.Body).Decode(&data)
 	panicIf(err)
+
+	if data.Valid {
+		f, err := os.OpenFile("/home/isucon/nospam.txt", os.O_WRONLY | os.O_CREATE | os.O_APPEND, 0644)
+		panicIf(err)
+		f.WriteString(hash+"\n")
+		log.Println("nospam: ", hash)
+	} else {
+		f, err := os.OpenFile("/home/isucon/spam.txt", os.O_WRONLY | os.O_CREATE | os.O_APPEND, 0644)
+		panicIf(err)
+		f.WriteString(hash+"\n")
+		log.Println("spam: ", hash)
+	}
+
 	return !data.Valid
 }
 
